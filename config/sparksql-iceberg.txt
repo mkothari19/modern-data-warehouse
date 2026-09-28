@@ -1,8 +1,6 @@
-spark-sql \
-  --jars /Users/mac/Documents/modern-data-warehouse/jars/iceberg-spark-runtime-3.5_2.12-1.6.0.jar \
-  --conf spark.sql.catalog.warehouse=org.apache.iceberg.spark.SparkCatalog \
-  --conf spark.sql.catalog.warehouse.type=rest \
-  --conf spark.sql.catalog.warehouse.uri=http://localhost:8181
+ spark-sql --properties-file config/spark-defaults.conf
+
+
 
   ## CREATE PARTITION DAYS WISE
 
@@ -43,3 +41,88 @@ spark-sql \
 ## File pruning/Parquet statistics
     # File Pruning : Skip unnecessary data files
     # parquet statistics : Skip meta data store in file like min,max value,null count.
+
+# Iceberg Time to Travel
+ select committed_at, snapshot_id parent_id, operation,summary from warehouse.ecommerce.bronze.orders_partitioned.snapshots;
+ committed_at    parent_id       operation       summary
+ 2026-09-28 21:40:12.608 2744900226175815107     append  {"added-data-files":"15","added-files-size":"31799","added-records":"15","app-id":"local-1790596480752","changed-partition-count":"15","engine-name":"spark","engine-version":"3.5.4","iceberg-version":"Apache Iceberg 1.6.0 (commit 229d8f6fcd109e6c8943ea7cbb41dab746c6d0ed)","spark.app.id":"local-1790596480752","total-data-files":"15","total-delete-files":"0","total-equality-deletes":"0","total-files-size":"31799","total-position-deletes":"0","total-records":"15"}
+ 2026-09-28 21:51:58.202 5231636094647539990     append  {"added-data-files":"15","added-files-size":"31059","added-records":"15","app-id":"local-1790596480752","changed-partition-count":"15","engine-name":"spark","engine-version":"3.5.4","iceberg-version":"Apache Iceberg 1.6.0 (commit 229d8f6fcd109e6c8943ea7cbb41dab746c6d0ed)","spark.app.id":"local-1790596480752","total-data-files":"30","total-delete-files":"0","total-equality-deletes":"0","total-files-size":"62858","total-position-deletes":"0","total-records":"30"}
+ 2026-09-28 22:08:19.198 8943635824999938050     append  {"added-data-files":"1","added-files-size":"2245","added-records":"5","app-id":"local-1790596480752","changed-partition-count":"1","engine-name":"spark","engine-version":"3.5.4","iceberg-version":"Apache Iceberg 1.6.0 (commit 229d8f6fcd109e6c8943ea7cbb41dab746c6d0ed)","spark.app.id":"local-1790596480752","total-data-files":"31","total-delete-files":"0","total-equality-deletes":"0","total-files-size":"65103","total-position-deletes":"0","total-records":"35"}
+ Time taken: 0.28 seconds, Fetched 3 row(s)
+
+3 snapshot
+Read the records from previous snapshot
+SELECT *
+FROM warehouse.ecommerce.bronze.orders_partitioned
+VERSION AS OF 8943635824999938050;
+
+# Schema Evaluation
+ALTER TABLE warehouse.ecommerce.bronze.orders_partitioned
+ADD COLUMNS (
+    discount DECIMAL(10,2)
+);
+
+SELECT
+    order_id,
+    order_amount,
+    discount
+FROM warehouse.ecommerce.bronze.orders_partitioned where discount IS NOT NULL
+LIMIT 5;
+order_id        order_amount    discount
+31      1200.00 NULL
+32      3600.00 NULL
+33      1500.00 NULL
+34      4400.00 NULL
+35      1800.00 NULL
+Successfully added new field without break discount value null because iceberg would not rewrite on old file.
+
+### CORE FEATURE PARTITION EVALUATION
+SHOW CREATE TABLE warehouse.ecommerce.bronze.orders_partitioned;
+ SET spark.sql.extensions;
+
+spark.sql.extensions    org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+
+ALTER TABLE warehouse.ecommerce.bronze.orders_partitioned
+ADD PARTITION FIELD months(order_timestamp);
+
+spark-sql (default)> SHOW CREATE TABLE warehouse.ecommerce.bronze.orders_partitioned;
+createtab_stmt
+CREATE TABLE warehouse.ecommerce.bronze.orders_partitioned (
+  order_id BIGINT,
+  customer_id BIGINT,
+  product_id BIGINT,
+  quantity INT,
+  order_amount DECIMAL(10,2),
+  order_status STRING,
+  order_timestamp TIMESTAMP,
+  discount DECIMAL(10,2))
+USING iceberg
+PARTITIONED BY (days(order_timestamp), months(order_timestamp))
+LOCATION 's3://warehouse/ecommerce/bronze/orders_partitioned'
+TBLPROPERTIES (
+  'created-at' = '2026-09-28T16:10:10.485798068Z',
+  'current-snapshot-id' = '7855340920983551341',
+  'format' = 'iceberg/parquet',
+  'format-version' = '2',
+  'write.parquet.compression-codec' = 'zstd')
+
+Time taken: 0.177 seconds, Fetched 1 row(s)
+spark-sql (default)>
+SEE TWO PARTITION DAY and MONTH WISE
+
+SELECT *
+FROM warehouse.ecommerce.bronze.orders_partitioned.partitions
+WHERE spec_id = 1;
+SELECT *
+FROM warehouse.ecommerce.bronze.orders_partitioned.partitions
+WHERE spec_id = 0;
+
+eberg performance ke liye mainly ye mechanisms use karta hai:
+
+## No Indxing like Postgres Btree it will have below
+
+Partitioning → irrelevant partitions skip
+File pruning → irrelevant Parquet files skip
+Parquet statistics → min/max/null stats se files skip
+Manifest metadata → kaunse files/partitions relevant hain identify
+Sorting / clustering → related data ko physically closer rakhkar scans efficient bana sakte ho
