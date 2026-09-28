@@ -1,2 +1,9 @@
-.idea/vcs.xml
+.idea/
 .venv/
+bin/
+lib/
+metastore_db/
+derby.log
+untitled/
+*.iml
+pyvenv.cfg

@@ -1,0 +1,5 @@
+spark-sql \
+  --jars /Users/mac/Documents/modern-data-warehouse/jars/iceberg-spark-runtime-3.5_2.12-1.6.0.jar \
+  --conf spark.sql.catalog.warehouse=org.apache.iceberg.spark.SparkCatalog \
+  --conf spark.sql.catalog.warehouse.type=rest \
+  --conf spark.sql.catalog.warehouse.uri=http://localhost:8181
