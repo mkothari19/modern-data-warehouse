@@ -3,3 +3,43 @@ spark-sql \
   --conf spark.sql.catalog.warehouse=org.apache.iceberg.spark.SparkCatalog \
   --conf spark.sql.catalog.warehouse.type=rest \
   --conf spark.sql.catalog.warehouse.uri=http://localhost:8181
+
+  ## CREATE PARTITION DAYS WISE
+
+  CREATE TABLE warehouse.ecommerce.bronze.orders_partitioned
+  USING iceberg
+  PARTITIONED BY (days(order_timestamp))
+  AS
+  SELECT *
+  FROM warehouse.ecommerce.bronze.orders;
+  ## HOW DATA STORE IN PARTITION
+  SELECT *
+  FROM warehouse.ecommerce.bronze.orders_partitioned.partitions;
+
+  ##Partition pruning vs predicate pushdown
+
+  ##Partition pruning
+  Only Scala the records of Days 20-02-2026 rest skip
+  SELECT *
+  FROM warehouse.ecommerce.bronze.orders_partitioned
+  WHERE order_timestamp >= '2026-02-20'
+    AND order_timestamp < '2026-02-21';
+
+    ## predicate pushdown
+    One we said Filter push into BatchScan
+     EXPLAIN
+                       > SELECT *
+                       > FROM warehouse.ecommerce.bronze.orders_partitioned
+                       > WHERE order_timestamp >= '2026-02-20'
+                       >   AND order_timestamp <  '2026-02-21'
+                       >   AND order_status = 'COMPLETED';
+
+                       == Physical Plan ==
+                       *(1) Filter (((isnotnull(order_status#780) AND (order_timestamp#781 >= 2026-02-20 00:00:00)) AND (order_timestamp#781 < 2026-02-21 00:00:00)) AND (order_status#780 = COMPLETED))
+                       +- *(1) ColumnarToRow
+                          +- BatchScan warehouse.ecommerce.bronze.orders_partitioned[order_id#775L, customer_id#776L, product_id#777L, quantity#778, order_amount#779, order_status#780, order_timestamp#781] warehouse.ecommerce.bronze.orders_partitioned (branch=null) [filters=order_timestamp IS NOT NULL, order_status IS NOT NULL, order_timestamp >= 1771525800000000, order_timestamp < 1771612200000000, order_status = 'COMPLETED', groupedBy=] RuntimeFilters: []
+
+
+## File pruning/Parquet statistics
+    # File Pruning : Skip unnecessary data files
+    # parquet statistics : Skip meta data store in file like min,max value,null count.
