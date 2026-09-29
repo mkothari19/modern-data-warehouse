@@ -125,4 +125,4 @@ Partitioning → irrelevant partitions skip
 File pruning → irrelevant Parquet files skip
 Parquet statistics → min/max/null stats se files skip
 Manifest metadata → kaunse files/partitions relevant hain identify
-Sorting / clustering → related data ko physically closer rakhkar scans efficient bana sakte ho
+ Sorting / clustering → related data ko physically closer rakhkar scans efficient bana sakte ho
