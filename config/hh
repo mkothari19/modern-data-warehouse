@@ -1,0 +1,37 @@
+DESCRIBE warehouse.ecommerce.silver.dim_date;
+DESCRIBE warehouse.ecommerce.silver.dim_products;
+DESCRIBE warehouse.ecommerce.silver.dim_category;
+DESCRIBE warehouse.ecommerce.silver.dim_customer;
+DESCRIBE warehouse.ecommerce.silver.fact_orders;
+
+# VERIFY NEW ENTRY IN Bronze order Table
+SELECT o.* from warehouse.ecommerce.bronze.orders o LEFT ANTI JOIN warehouse.ecommerce.silver.fact_orders f ON o.order_id=f.order_id;
+
+# dimension lookup verify because fact table doest not have source_id like customer_id. Fact table store surrogate key like customer-key
+SELECT * from warehouse.ecommerce.silver.dim_customer  where customer_id=1 and is_current=true
+SELECT * from warehouse.ecommerce.silver.dim_product  where product_id=103 and is_current=true
+SELECT * from warehouse.ecommerce.silver.dim_date  where full_date=DATE '2026-03-17 10:00:00' and is_current=true
+
+SELECT * (SELECT order_id,product_id,customer_id,updated_at, ROW_NUMBER() PARTITION BY order_id order by updated_at as rn )s from warehouse.ecommerce.bronze.orders ) where rn>1
+
+## INSERT NEW RECORDS warehouse.ecommerce.silver.fact_orders
+INSERT INTO warehouse.ecommerce.silver.fact_orders
+ SELECT
+   o.order_id,
+   c.customer_key,
+   p.product_key,
+   d.date_key,
+   o.quantity,
+   o.order_amount,
+   o.order_status,
+   o.order_timestamp FROM(SELECT o.* from warehouse.ecommerce.bronze.orders o
+   LEFT ANTI JOIN warehouse.ecommerce.silver.fact_orders f ON o.order_id=f.order_id) o
+   JOIN warehouse.ecommerce.silver.dim_customer c ON o.customer_id=c.customer_id AND c.is_current=true
+   JOIN warehouse.ecommerce.silver.dim_products p ON  o.product_id=p.product_id AND p.is_current=true
+   JOIN warehouse.ecommerce.silver.dim_date d ON CAST(o.order_timestamp AS DATE)=d.full_date
+
+
+
+
+
+

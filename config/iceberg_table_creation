@@ -1,0 +1,202 @@
+## FACT TABLE
+CREATE TABLE warehouse.ecommerce.silver.fact_orders(
+    order_id BIGINT,
+    customer_key BIGINT,
+    product_key BIGINT,
+    category_key BIGINT,
+    date_key INT,
+    quantity INT,
+    order_amount DECIMAL(10,2),
+    order_status STRING,
+    discount DECIMAL(10,2),
+    order_timestamp TIMESTAMP
+)
+USING iceberg
+PARTITIONED BY (months(order_timestamp));
+
+####### CREATE DIM DATE
+CREATE TABLE warehouse.ecommerce.silver.dim_date (
+    date_key INT,
+    full_date DATE,
+    day INT,
+    day_name STRING,
+    month INT,
+    month_name STRING,
+    quarter INT,
+    year INT
+)
+USING iceberg;
+
+INSERT INTO warehouse.ecommerce.silver.dim_date
+SELECT
+    CAST(date_format(date_value, 'yyyyMMdd') AS INT) AS date_key,
+    date_value AS full_date,
+    day(date_value) AS day,
+    date_format(date_value, 'EEEE') AS day_name,
+    month(date_value) AS month,
+    date_format(date_value, 'MMMM') AS month_name,
+    quarter(date_value) AS quarter,
+    year(date_value) AS year
+FROM (
+    SELECT explode(
+        sequence(
+            DATE '2026-01-01',
+            DATE '2026-12-31',
+            INTERVAL 1 DAY
+        )
+    ) AS date_value
+);
+
+### CREATE DIM_CUSTOMER TYPE SCD2
+CREATE TABLE warehouse.ecommerce.silver.dim_customer (
+    customer_key BIGINT,
+    customer_id BIGINT,
+    customer_name STRING,
+    email STRING,
+    city STRING,
+    country STRING,
+    created_at TIMESTAMP,
+    effective_from TIMESTAMP,
+    effective_to TIMESTAMP,
+    is_current BOOLEAN
+)
+USING iceberg;
+
+INSERT INTO warehouse.ecommerce.silver.dim_customer
+SELECT
+    customer_id AS customer_key,
+    customer_id,
+    customer_name,
+    email,
+    city,
+    country,
+    created_at,
+    current_timestamp() AS effective_from,
+    TIMESTAMP '9999-12-31 23:59:59' AS effective_to,
+    TRUE AS is_current
+FROM warehouse.ecommerce.bronze.customers;
+
+### PRODUCT SSC2 TYPE
+
+CREATE TABLE warehouse.ecommerce.silver.dim_product (
+    product_key BIGINT,
+    product_id BIGINT,
+    product_name STRING,
+    category_key BIGINT,
+    price DECIMAL(10,2),
+    created_at TIMESTAMP,
+    effective_from TIMESTAMP,
+    effective_to TIMESTAMP,
+    is_current BOOLEAN
+)
+USING iceberg;
+
+INSERT INTO warehouse.ecommerce.silver.dim_products
+SELECT
+    ROW_NUMBER() OVER (ORDER BY p.product_id) AS product_key,
+    p.product_id,
+    p.product_name,
+    c.category_key,
+    p.price,
+    p.created_at,
+    current_timestamp() AS effective_from,
+    TIMESTAMP '9999-12-31 23:59:59' AS effective_to,
+    TRUE AS is_current
+FROM warehouse.ecommerce.bronze.products p
+JOIN warehouse.ecommerce.silver.dim_category c
+    ON p.category = c.category_name;
+
+## DIM CATAGEGORY
+
+CREATE TABLE warehouse.ecommerce.silver.dim_category (
+    category_key BIGINT,
+    category_name STRING,
+    effective_from TIMESTAMP,
+    effective_to TIMESTAMP,
+    is_current BOOLEAN
+)
+USING iceberg;
+
+INSERT INTO warehouse.ecommerce.silver.dim_category
+SELECT
+    ROW_NUMBER() OVER (ORDER BY category) AS category_key,
+    category AS category_name,
+    current_timestamp() AS effective_from,
+    TIMESTAMP '9999-12-31 23:59:59' AS effective_to,
+    TRUE AS is_current
+FROM (
+    SELECT DISTINCT category
+    FROM warehouse.ecommerce.bronze.products
+    WHERE category IS NOT NULL
+);
+
+## Full Initial load from bronze order table
+
+INSERT INTO warehouse.ecommerce.silver.fact_orders_new
+SELECT
+    o.order_id,
+    c.customer_key,
+    p.product_key,
+    d.date_key,
+    o.quantity,
+    o.order_amount,
+    o.describe ,
+    o.order_timestamp
+FROM warehouse.ecommerce.bronze.orders o
+JOIN warehouse.ecommerce.silver.dim_customer c
+    ON o.customer_id = c.customer_id
+   AND c.is_current = true
+JOIN warehouse.ecommerce.silver.dim_products p
+    ON o.product_id = p.product_id
+   AND p.is_current = true
+JOIN warehouse.ecommerce.silver.dim_date d
+    ON CAST(o.order_timestamp AS DATE) = d.full_date;
+
+CREATE TABLE IF NOT EXISTS warehouse.ecommerce.gold.data_quality_results (
+    run_id              STRING,
+    source_table_name          STRING,
+    target_table_name          STRING,
+    layer               STRING,
+    check_name          STRING,
+    total_records       BIGINT,
+    passed_records      BIGINT,
+    failed_records      BIGINT,
+    duplicate_records      BIGINT,
+    pass_percentage     DECIMAL(5,2),
+    status              STRING,
+    execution_time      TIMESTAMP
+)
+USING ICEBERG;
+
+CREATE TABLE warehouse.ecommerce.silver.cleaned_orders (
+    order_id BIGINT,
+    customer_id BIGINT,
+    product_id BIGINT,
+    quantity INT,
+    order_amount DECIMAL(18,2),
+    order_status STRING,
+    order_timestamp TIMESTAMP,
+    discount DECIMAL(18,2),
+    updated_at TIMESTAMP
+)
+USING ICEBERG;
+
+CREATE TABLE warehouse.ecommerce.silver.ingestion_control (
+    source_table STRING,
+    watermark_column STRING,
+    last_watermark TIMESTAMP,
+    target_table STRING,
+    is_active BOOLEAN
+)
+USING iceberg;
+
+2. ORDER WATERMARK INSERT
+
+INSERT INTO warehouse.ecommerce.silver.ingestion_control
+VALUES (
+    'silver.cleaned_orders',
+    'updated_at',
+     NULL,
+    'silver.fact_orders',
+    true
+);

@@ -12,7 +12,9 @@
   FROM warehouse.ecommerce.bronze.orders;
   ## HOW DATA STORE IN PARTITION
   SELECT *
-  FROM warehouse.ecommerce.bronze.orders_partitioned.partitions;
+  FROM warehouse.ecommerce.bronze.orders.partitions;
+
+
 
   ##Partition pruning vs predicate pushdown
 
